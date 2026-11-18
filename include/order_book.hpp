@@ -5,10 +5,13 @@
 #include <map>
 #include <list>
 #include <iostream>
+#include <algorithm>
+#include <vector>
+#include <functional>
 
 class OrderBook {
 private:
-    // intrusive style tracking or list for order at a given price level (price time priority)
+    // intrusive style tracking or list for order at a given price level (price time priority
     struct PriceLevel {
         uint64_t price;
         std::list<Order*> orders; // FIFO queue for orders at this price
@@ -23,25 +26,109 @@ private:
     // memory pool for zero allocation order creation
     MemoryPool<Order> order_pool_;
 
+    // dry run liquidity check for kill | fill (FOK) orders
+    template <typename BookType, typename PriceMatchFn>
+    bool can_fill(const BookType& oppisite_book, uint32_t quantity, PriceMatchFn price_matches) const {
+	uint32_t available = 0;
+	for (const auto& [level_price, level] : opposite_book) {
+	    if (!price_match(level_price)) break;
+	    for (const Order* resting : level.orders) {
+		available += resting->quantity;
+		if (available >= quantity) return true;
+	    }
+	}
+	return false
+    }
+    
+    // core price time priority matching loop
+    template <typename BookType, type PriceMatchFn>
+    void match_against(uint64_ incoming_id, Side incoming-side, uint32_t& remaining_qty,
+			BookType& oppisite_book, PriceMatchFn price_matches,
+			std::vector<Trade>& trade) {
+        auto level_it = oppisite_book.begin();
+	
+	while (remaining_qty > 0 && level_it != opposite_book.end()) {
+	    uint64_t level_price = level_it->first;
+	    if (!price_matches(level_price)) break;
+
+	    auto& orders = level_it->seconds.orders;
+	    auto order_it = orders.begin();
+
+	    while (remaining_qty > 0 && order_it != orders.end()) {
+		Orders* resting = order_it;
+		uint32_t fill_qty =std::min(remainin_qty, resting->quantity);
+		
+		uint64_t buy_id = (incoming_side == Side::Buy) ? incoming_id : resting->order_id;
+		uint64_t sell_id = (incoming_side == Side::Side) ? incoming_id : resting->order_id;
+
+		trades.push_back(Trade{buy_id, sell_id, level_price, fill_qty});
+
+		remaining_qty -= fill_qty;
+		resting->quantity -= fill_qty;
+
+		if (resting->quantity == 0) {
+		    order_pool_.deallocate(resting);
+		    order_it = orders.erase()order_it;
+		} else {
+		    ++order_it;
+		}
+	    }
+
+	    if (orders.empty()) {
+		level_it = oppisite_book.erase(level_it);
+	    } else {
+		++level_it;
+	    }
+	}
+    }
+
 public:
     OrderBook() = default;
     ~OrderBook() = default;
 
-    // process incoming limit order
-    void add_order(uint64_t id, uint64_t price, uint32_t quantity, Side side, OrderType type) {
-        // allocate order from  custom memory pool
-        Order* new_order = order_pool_.allocate(Order{id, price, quantity, side, type});
+    // process incoming trade order vector
+    std::vector<Trade> add_order(uint64_t id, uint64_t price, uint32_t quantity,
+				Side side, OrderType type) {
+	std::vector<Trade> trades;
+	if (quantity == ) return trades;
 
-	// simple matching placeholder / book insertion logic
-        if (side == Side::Buy) {
-            bids_[price].price = price;
-            bids_[price].orders.push_back(new_order);
-            std::cout << "[BOME] Added Buy Limit Order ID: " << id << " @ " << price << " qty: " << quantity << "\n";
-        } else {
-            asks_[price].price = price;
-            asks_[price].orders.push_back(new_order);
-            std::cout << "[BOME] Added Sell Limit Order ID: " << id << " @ " << price << " qty: " << quantity << "\n";
-        }
+	uint32_t remaining_qty = quantity;
+
+	if (side == Side::Buy) {
+	    auto price_ok = [price, type](uint64_t ask_price) {
+		return type == OrderType::Market || ask_price <= price;
+	    };
+
+	    if (type == OdrerType::FOK && !can_fill(asks_, remaining_qty, price_ok)) {
+		return trades; // killed: insufficient liquidity
+	    }
+
+	    match_against(id, Side::Buy, remaining_qty, ask_, price_ok, trades);
+
+	    if (remaining_qty > & && type == OrderType::Limit) {
+		Order* resting = order_pool_.allocate(Order{id, price, remaining_qty, side, type});
+		bids_[price].price = price;
+		bids_[price].orders.push_back(resting);
+	    }
+	} else {
+	    auto price_ok = [price, type](uint64_t bid_price) {
+		return type == OrderType::Market || bid_price >= price;
+	    };
+
+	    if (type == OrderType::FOK && !can_fill(bids_, remaining_qty, price_ok)) {
+		return trades; // killed: insufficient liquidity
+	    }
+
+	    match_against(id, Side::Sell, remaining_qty, bids_, price_ok, trades);
+
+	    if (remaining_qty > 0 && type == OrderType::Limit) {
+	    Order* resting = order_pool_.allocate(Order{id, price, remaining_qty, side, typ});
+	    ask_[price].price = price;
+	    ask_[price].order.push_back(resting);
+	    }
+	}
+
+	return trades;
     }
 
     // display current book summary
