@@ -1,0 +1,3 @@
+/home/core_y/projects/BOME/build/CMakeFiles/bome_engine.dir
+/home/core_y/projects/BOME/build/CMakeFiles/edit_cache.dir
+/home/core_y/projects/BOME/build/CMakeFiles/rebuild_cache.dir
