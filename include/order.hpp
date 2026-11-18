@@ -9,7 +9,9 @@ enum class Side : uint8_t {
 
 enum class OrderType : uint8_t {
     Limit = 0,
-    Market = 1
+    Market = 1,
+    IOC = 2, // immediate | canecl: fill what can, cancel remainder
+    FOK = 3 // fill | kill: fill 100%  immediatly or reject entirely
 };
 
 struct Order {
@@ -19,4 +21,11 @@ struct Order {
     Side side;             // 1 byte  - Buy or Sell
     OrderType type;        // 1 byte  - Limit or Market
     // 2 bytes of structural padding to maintain 8-byte alignment (Total size: 24 bytes)
+};
+
+struct Trade {
+    uint64_t buy_order_id;
+    uint64_t sell_order_id;
+    uint64_t price;	// execution pricing (resting order's price) 
+    uint32_t quantity;
 };
