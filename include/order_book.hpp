@@ -2,84 +2,82 @@
 
 #include "order.hpp"
 #include "memory_pool.hpp"
-#include <map>
-#include <list>
+#include <algorithm>
+#include <functional>
 #include <iostream>
 #include <algorithm>
 #include <vector>
-#include <functional>
+#include <list>
+#include <map>
 
 class OrderBook {
 private:
-    // intrusive style tracking or list for order at a given price level (price time priority
+    // intrusive style tracking or list for order at a given price level (p>
     struct PriceLevel {
-        uint64_t price;
+        uint64_t price = 0;
         std::list<Order*> orders; // FIFO queue for orders at this price
     };
 
-    // bids: sorted descending (highest price highest priority) -> std::greater
+    // bids: highest price first | Asks: lowest price first
     std::map<uint64_t, PriceLevel, std::greater<uint64_t>> bids_;
-
-    // asks: sorted ascending (lower price highest priority) -> std::less (default)
     std::map<uint64_t, PriceLevel, std::less<uint64_t>> asks_;
 
-    // memory pool for zero allocation order creation
     MemoryPool<Order> order_pool_;
 
     // dry run liquidity check for kill | fill (FOK) orders
     template <typename BookType, typename PriceMatchFn>
-    bool can_fill(const BookType& oppisite_book, uint32_t quantity, PriceMatchFn price_matches) const {
-	uint32_t available = 0;
-	for (const auto& [level_price, level] : opposite_book) {
-	    if (!price_match(level_price)) break;
-	    for (const Order* resting : level.orders) {
-		available += resting->quantity;
-		if (available >= quantity) return true;
-	    }
-	}
-	return false
+    bool can_fill(const BookType& opposite_book, uint32_t quantity, PriceMatchFn price_matches) const {
+        uint32_t available = 0;
+        for (const auto& [level_price, level] : opposite_book) {
+            if (!price_matches(level_price)) break;
+            for (const Order* resting : level.orders) {
+                available += resting->quantity;
+                if (available >= quantity) return true;
+            }
+        }
+        return false;
     }
-    
+
     // core price time priority matching loop
-    template <typename BookType, type PriceMatchFn>
-    void match_against(uint64_ incoming_id, Side incoming-side, uint32_t& remaining_qty,
-			BookType& oppisite_book, PriceMatchFn price_matches,
-			std::vector<Trade>& trade) {
-        auto level_it = oppisite_book.begin();
-	
-	while (remaining_qty > 0 && level_it != opposite_book.end()) {
-	    uint64_t level_price = level_it->first;
-	    if (!price_matches(level_price)) break;
+    template <typename BookType, typename PriceMatchFn>
+    void match_against(uint64_t incoming_id, Side incoming_side, uint32_t& remaining_qty,
+                       BookType& opposite_book, PriceMatchFn price_matches,
+                       std::vector<Trade>& trades) {
+        auto level_it = opposite_book.begin();
 
-	    auto& orders = level_it->seconds.orders;
-	    auto order_it = orders.begin();
+        while (remaining_qty > 0 && level_it != opposite_book.end()) {
+            uint64_t level_price = level_it->first;
+            if (!price_matches(level_price)) break;
 
-	    while (remaining_qty > 0 && order_it != orders.end()) {
-		Orders* resting = order_it;
-		uint32_t fill_qty =std::min(remainin_qty, resting->quantity);
-		
-		uint64_t buy_id = (incoming_side == Side::Buy) ? incoming_id : resting->order_id;
-		uint64_t sell_id = (incoming_side == Side::Side) ? incoming_id : resting->order_id;
+            auto& orders = level_it->second.orders;
+            auto order_it = orders.begin();
 
-		trades.push_back(Trade{buy_id, sell_id, level_price, fill_qty});
+            while (remaining_qty > 0 && order_it != orders.end()) {
+                Order* resting = *order_it;
+                uint32_t fill_qty = std::min(remaining_qty, resting->quantity);
 
-		remaining_qty -= fill_qty;
-		resting->quantity -= fill_qty;
+                uint64_t buy_id  = (incoming_side == Side::Buy) ? incoming_id : resting->order_id;
+                uint64_t sell_id = (incoming_side == Side::Sell) ? incoming_id : resting->order_id;
 
-		if (resting->quantity == 0) {
-		    order_pool_.deallocate(resting);
-		    order_it = orders.erase()order_it;
-		} else {
-		    ++order_it;
-		}
-	    }
+                trades.push_back(Trade{buy_id, sell_id, level_price, fill_qty});
 
-	    if (orders.empty()) {
-		level_it = oppisite_book.erase(level_it);
-	    } else {
-		++level_it;
-	    }
-	}
+                remaining_qty -= fill_qty;
+                resting->quantity -= fill_qty;
+
+                if (resting->quantity == 0) {
+                    order_pool_.deallocate(resting);
+                    order_it = orders.erase(order_it);
+                } else {
+                    ++order_it;
+                }
+            }
+
+            if (orders.empty()) {
+                level_it = opposite_book.erase(level_it);
+            } else {
+                ++level_it;
+            }
+        }
     }
 
 public:
@@ -88,47 +86,47 @@ public:
 
     // process incoming trade order vector
     std::vector<Trade> add_order(uint64_t id, uint64_t price, uint32_t quantity,
-				Side side, OrderType type) {
-	std::vector<Trade> trades;
-	if (quantity == ) return trades;
+                                 Side side, OrderType type) {
+        std::vector<Trade> trades;
+        if (quantity == 0) return trades;
 
-	uint32_t remaining_qty = quantity;
+        uint32_t remaining_qty = quantity;
 
-	if (side == Side::Buy) {
-	    auto price_ok = [price, type](uint64_t ask_price) {
-		return type == OrderType::Market || ask_price <= price;
-	    };
+        if (side == Side::Buy) {
+            auto price_ok = [price, type](uint64_t ask_price) {
+                return type == OrderType::Market || ask_price <= price;
+            };
 
-	    if (type == OdrerType::FOK && !can_fill(asks_, remaining_qty, price_ok)) {
-		return trades; // killed: insufficient liquidity
-	    }
+            if (type == OrderType::FOK && !can_fill(asks_, remaining_qty, price_ok)) {
+                return trades; // killed: insufficient liquidity
+            }
 
-	    match_against(id, Side::Buy, remaining_qty, ask_, price_ok, trades);
+            match_against(id, Side::Buy, remaining_qty, asks_, price_ok, trades);
 
-	    if (remaining_qty > & && type == OrderType::Limit) {
-		Order* resting = order_pool_.allocate(Order{id, price, remaining_qty, side, type});
-		bids_[price].price = price;
-		bids_[price].orders.push_back(resting);
-	    }
-	} else {
-	    auto price_ok = [price, type](uint64_t bid_price) {
-		return type == OrderType::Market || bid_price >= price;
-	    };
+            if (remaining_qty > 0 && type == OrderType::Limit) {
+                Order* resting = order_pool_.allocate(Order{id, price, remaining_qty, side, type});
+                bids_[price].price = price;
+                bids_[price].orders.push_back(resting);
+            }
+        } else {
+            auto price_ok = [price, type](uint64_t bid_price) {
+                return type == OrderType::Market || bid_price >= price;
+            };
 
-	    if (type == OrderType::FOK && !can_fill(bids_, remaining_qty, price_ok)) {
-		return trades; // killed: insufficient liquidity
-	    }
+            if (type == OrderType::FOK && !can_fill(bids_, remaining_qty, price_ok)) {
+                return trades; // killed: insufficient liquidity
+            }
 
-	    match_against(id, Side::Sell, remaining_qty, bids_, price_ok, trades);
+            match_against(id, Side::Sell, remaining_qty, bids_, price_ok, trades);
 
-	    if (remaining_qty > 0 && type == OrderType::Limit) {
-	    Order* resting = order_pool_.allocate(Order{id, price, remaining_qty, side, typ});
-	    ask_[price].price = price;
-	    ask_[price].order.push_back(resting);
-	    }
-	}
+            if (remaining_qty > 0 && type == OrderType::Limit) {
+                Order* resting = order_pool_.allocate(Order{id, price, remaining_qty, side, type});
+                asks_[price].price = price;
+                asks_[price].orders.push_back(resting);
+            }
+        }
 
-	return trades;
+        return trades;
     }
 
     // display current book summary
